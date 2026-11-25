@@ -24,22 +24,33 @@ object Store {
 }
 
 object Net {
-    /** সার্ভারে POST পাঠায় (আলাদা থ্রেডে), উত্তরের অপেক্ষা করে না */
-    fun postAsync(path: String, json: String, session: String) {
+    /** সার্ভারে POST পাঠায় (আলাদা থ্রেডে)। retries থাকলে ব্যর্থ হলে কিছুক্ষণ পরে আবার চেষ্টা করে */
+    fun postAsync(path: String, json: String, session: String, retries: Int = 0) {
         Thread {
-            try {
-                val u = URL(Store.BASE + "/api.php?r=" + URLEncoder.encode(path, "UTF-8"))
-                val c = u.openConnection() as HttpURLConnection
-                c.requestMethod = "POST"
-                c.connectTimeout = 8000
-                c.readTimeout = 8000
-                c.doOutput = true
-                c.setRequestProperty("Content-Type", "application/json")
-                if (session.isNotEmpty()) c.setRequestProperty("X-Auth-Token", session)
-                c.outputStream.use { it.write(json.toByteArray(Charsets.UTF_8)) }
-                c.responseCode
-                c.disconnect()
-            } catch (_: Exception) {
+            var attempt = 0
+            while (true) {
+                var ok = false
+                try {
+                    val u = URL(Store.BASE + "/api.php?r=" + URLEncoder.encode(path, "UTF-8"))
+                    val c = u.openConnection() as HttpURLConnection
+                    c.requestMethod = "POST"
+                    c.connectTimeout = 8000
+                    c.readTimeout = 8000
+                    c.doOutput = true
+                    c.setRequestProperty("Content-Type", "application/json")
+                    if (session.isNotEmpty()) c.setRequestProperty("X-Auth-Token", session)
+                    c.outputStream.use { it.write(json.toByteArray(Charsets.UTF_8)) }
+                    ok = c.responseCode in 200..299
+                    c.disconnect()
+                } catch (_: Exception) {
+                }
+                if (ok || attempt >= retries) break
+                attempt++
+                try {
+                    Thread.sleep(4000L * attempt)
+                } catch (_: Exception) {
+                    break
+                }
             }
         }.start()
     }
