@@ -206,6 +206,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         Store.foreground = true
+        Notifs.stopRing(this)
         web.onResume()
         try {
             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancelAll()

@@ -12,7 +12,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 
 object Notifs {
-    private const val CH_CALL = "calls_v1"
+    private const val CH_CALL = "calls_v2"
     private const val CH_MSG = "messages_v1"
     private const val CH_MISSED = "missed_v1"
     const val ACTION_CALL_DONE = "online.malaysiagrowthagency.vynzo.CALL_DONE"
@@ -24,16 +24,9 @@ object Notifs {
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val ring = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
         val callCh = NotificationChannel(CH_CALL, "ইনকামিং কল", NotificationManager.IMPORTANCE_HIGH).apply {
-            description = "কল আসলে রিংটোন সহ"
-            setSound(
-                ring,
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .build()
-            )
-            enableVibration(true)
-            vibrationPattern = longArrayOf(0, 700, 400, 700, 400, 700, 400, 700)
+            description = "কল আসলে (রিংটোন আলাদা সার্ভিস বাজায়)"
+            setSound(null, null)
+            enableVibration(false)
             lockscreenVisibility = Notification.VISIBILITY_PUBLIC
         }
         val msgCh = NotificationChannel(CH_MSG, "মেসেজ", NotificationManager.IMPORTANCE_HIGH).apply {
@@ -48,12 +41,9 @@ object Notifs {
         return if (activity) PendingIntent.getActivity(ctx, code, i, f) else PendingIntent.getBroadcast(ctx, code, i, f)
     }
 
-    fun incomingCall(ctx: Context, callId: String, from: String, name: String, video: Boolean) {
+    fun buildCall(ctx: Context, callId: String, from: String, name: String, video: Boolean): Notification {
         channels(ctx)
-        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val id = callNotifId(callId)
-        val kind = if (video) "ভিডিও কল" else "অডিও কল"
-
         val full = Intent(ctx, IncomingCallActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION
             putExtra("call", callId); putExtra("from", from); putExtra("name", name); putExtra("video", video)
@@ -65,28 +55,49 @@ object Notifs {
         val decline = Intent(ctx, CallActionReceiver::class.java).apply {
             putExtra("call", callId); putExtra("from", from)
         }
-
+        val person = androidx.core.app.Person.Builder().setName(name).setImportant(true).build()
         val b = NotificationCompat.Builder(ctx, CH_CALL)
             .setSmallIcon(R.drawable.ic_stat)
-            .setContentTitle("$name কল করছে")
-            .setContentText("VYNZO $kind")
+            .setContentTitle(name)
+            .setContentText(if (video) "VYNZO ভিডিও কল" else "VYNZO অডিও কল")
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOngoing(true)
             .setAutoCancel(false)
+            .setOnlyAlertOnce(true)
             .setTimeoutAfter(45000)
             .setContentIntent(pi(ctx, id, accept, true))
             .setFullScreenIntent(pi(ctx, id + 1, full, true), true)
-            .addAction(0, "কেটে দাও", pi(ctx, id + 2, decline, false))
-            .addAction(0, "ধরো", pi(ctx, id + 3, accept, true))
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            b.setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE))
-            b.setVibrate(longArrayOf(0, 700, 400, 700, 400, 700))
+            .setStyle(
+                NotificationCompat.CallStyle.forIncomingCall(
+                    person, pi(ctx, id + 2, decline, false), pi(ctx, id + 3, accept, true)
+                )
+            )
+        return b.build()
+    }
+
+    fun incomingCall(ctx: Context, callId: String, from: String, name: String, video: Boolean) {
+        channels(ctx)
+        val i = Intent(ctx, RingService::class.java).apply {
+            putExtra("call", callId); putExtra("from", from); putExtra("name", name); putExtra("video", video)
         }
-        val n = b.build()
-        n.flags = n.flags or Notification.FLAG_INSISTENT // কল ধরা বা কাটা পর্যন্ত রিংটোন বাজতে থাকে
-        nm.notify(id, n)
+        try {
+            androidx.core.content.ContextCompat.startForegroundService(ctx, i)
+        } catch (_: Exception) {
+            // সার্ভিস না চললে অন্তত নোটিফিকেশন (রিংটোনসহ) দেখাও
+            val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val n = buildCall(ctx, callId, from, name, video)
+            n.flags = n.flags or Notification.FLAG_INSISTENT
+            nm.notify(callNotifId(callId), n)
+        }
+    }
+
+    fun stopRing(ctx: Context) {
+        try {
+            ctx.stopService(Intent(ctx, RingService::class.java))
+        } catch (_: Exception) {
+        }
     }
 
     /** কলারের কল কেটে দেওয়া বা ধরা হয়ে গেলে ঘণ্টা বন্ধ */
@@ -99,6 +110,7 @@ object Notifs {
             true
         }
         nm.cancel(id)
+        stopRing(ctx)
         ctx.sendBroadcast(Intent(ACTION_CALL_DONE).setPackage(ctx.packageName).putExtra("call", callId))
         if (showMissed && wasRinging) {
             channels(ctx)
