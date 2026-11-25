@@ -15,10 +15,10 @@ class FcmService : FirebaseMessagingService() {
         val name = d["name"] ?: ""
         when (d["t"]) {
             "call" -> if (!Store.foreground && call.isNotEmpty()) {
-                Notifs.incomingCall(this, call, d["from"] ?: "", name.ifEmpty { "কেউ" }, d["v"] == "1")
+                Notifs.incomingCall(this, call, (d["uid"] ?: d["from"] ?: ""), name.ifEmpty { "কেউ" }, d["v"] == "1")
             }
             "cancel" -> if (call.isNotEmpty()) Notifs.callDone(this, call, name, true)
-            "msg" -> if (!Store.foreground) Notifs.message(this, d["from"] ?: "", name, d["text"] ?: "")
+            "msg" -> if (!Store.foreground) Notifs.message(this, (d["uid"] ?: d["from"] ?: ""), name, d["text"] ?: "")
         }
     }
 }
