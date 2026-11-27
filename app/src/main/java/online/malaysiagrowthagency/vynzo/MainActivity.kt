@@ -4,13 +4,17 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.NotificationManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.View
+import android.webkit.GeolocationPermissions
 import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
 import android.webkit.ValueCallback
@@ -28,9 +32,31 @@ class MainActivity : AppCompatActivity() {
     private lateinit var web: WebView
     private var fileCb: ValueCallback<Array<Uri>>? = null
     private var pendingWebPerm: PermissionRequest? = null
+    private var geoOrigin: String? = null
+    private var geoCb: GeolocationPermissions.Callback? = null
     private var pageReady = false
 
     inner class Bridge {
+        @JavascriptInterface
+        fun setSpeaker(on: Boolean) {
+            try {
+                val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                am.mode = AudioManager.MODE_IN_COMMUNICATION
+                if (Build.VERSION.SDK_INT >= 31) {
+                    if (on) {
+                        val d = am.availableCommunicationDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                        if (d != null) am.setCommunicationDevice(d)
+                    } else {
+                        am.clearCommunicationDevice()
+                    }
+                } else {
+                    @Suppress("DEPRECATION")
+                    am.isSpeakerphoneOn = on
+                }
+            } catch (_: Exception) {
+            }
+        }
+
         @JavascriptInterface
         fun setSession(token: String?) {
             val t = token ?: ""
@@ -93,6 +119,22 @@ class MainActivity : AppCompatActivity() {
                         pendingWebPerm = req
                         ActivityCompat.requestPermissions(this@MainActivity, missing.toTypedArray(), 2)
                     }
+                }
+            }
+
+            override fun onGeolocationPermissionsShowPrompt(origin: String, cb: GeolocationPermissions.Callback) {
+                val ok = ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                    ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                if (ok) {
+                    cb.invoke(origin, true, false)
+                } else {
+                    geoOrigin = origin
+                    geoCb = cb
+                    ActivityCompat.requestPermissions(
+                        this@MainActivity,
+                        arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION),
+                        3
+                    )
                 }
             }
 
@@ -172,6 +214,12 @@ class MainActivity : AppCompatActivity() {
             if (r != null) {
                 if (res.isNotEmpty() && res.all { it == PackageManager.PERMISSION_GRANTED }) r.grant(r.resources) else r.deny()
             }
+        } else if (code == 3) {
+            val cb = geoCb
+            val o = geoOrigin
+            geoCb = null
+            geoOrigin = null
+            if (cb != null && o != null) cb.invoke(o, res.any { it == PackageManager.PERMISSION_GRANTED }, false)
         } else if (code == 1) {
             checkFullScreen()
         }
@@ -207,6 +255,7 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         Store.foreground = true
         Notifs.stopRing(this)
+        Push.ensureToken(this)
         web.onResume()
         try {
             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancelAll()
